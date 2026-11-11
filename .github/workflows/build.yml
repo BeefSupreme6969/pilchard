@@ -22,17 +22,22 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # The signing key lives in the repo's secrets, not in the code.
+      # The signing key lives in the repo's secrets, not in the code. Without it (a copy of
+      # the public repo, for example) the build makes debug APKs signed with Android's
+      # standard debug key instead, and publishes no release.
       - name: Get signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.PILCHARD_KEYSTORE_BASE64 }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error title=Missing signing key::Add the PILCHARD_KEYSTORE_BASE64 and PILCHARD_KEYSTORE_PASSWORD secrets (Settings > Secrets and variables > Actions)."
-            exit 1
+            echo "::notice title=No signing key::Building debug APKs. For signed builds, add the PILCHARD_KEYSTORE_BASE64 and PILCHARD_KEYSTORE_PASSWORD secrets (Settings > Secrets and variables > Actions)."
+            echo "BT=debug" >> "$GITHUB_ENV"
+            exit 0
           fi
           mkdir -p keystore
           echo "$KEYSTORE_BASE64" | base64 -d > keystore/pilchard.jks
+          echo "PILCHARD_KEYSTORE=keystore/pilchard.jks" >> "$GITHUB_ENV"
+          echo "BT=release" >> "$GITHUB_ENV"
 
       # The Google Play upload key, also from the repo's secrets. Optional: without it the
       # Play version is signed with the family key and no store file is made.
@@ -40,7 +45,7 @@ jobs:
         env:
           UPLOAD_BASE64: ${{ secrets.PILCHARD_UPLOAD_KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$UPLOAD_BASE64" ]; then
+          if [ -n "$UPLOAD_BASE64" ] && [ "$BT" = "release" ]; then
             mkdir -p keystore
             echo "$UPLOAD_BASE64" | base64 -d > keystore/upload.jks
             echo "PILCHARD_UPLOAD_KEYSTORE=keystore/upload.jks" >> "$GITHUB_ENV"
@@ -49,13 +54,12 @@ jobs:
 
       - name: Build
         env:
-          PILCHARD_KEYSTORE: keystore/pilchard.jks
           PILCHARD_KEYSTORE_PASSWORD: ${{ secrets.PILCHARD_KEYSTORE_PASSWORD }}
           PILCHARD_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.PILCHARD_UPLOAD_KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
           set -o pipefail
-          TASKS="assembleRelease"
+          if [ "$BT" = "release" ]; then TASKS="assembleRelease"; else TASKS="assembleDebug"; fi
           # The store file (.aab) for Google Play, signed with the upload key.
           if [ "$HAS_UPLOAD_KEY" = "true" ]; then TASKS="$TASKS :app:bundlePlayRelease"; fi
           ./gradlew $TASKS --console=plain 2>&1 | tee build.log
@@ -88,7 +92,7 @@ jobs:
       - name: Check menu languages
         run: |
           AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n1)
-          for apk in app/build/outputs/apk/family/release/app-family-release.apk app/build/outputs/apk/play/release/app-play-release.apk; do
+          for apk in app/build/outputs/apk/family/$BT/app-family-$BT.apk app/build/outputs/apk/play/$BT/app-play-$BT.apk; do
             LANGS=$("$AAPT2" dump resources "$apk" | grep -oE '^\s+\(([a-z]{2}(-r[A-Z]{2})?)\)' | tr -d ' ()' | sort -u | tr '\n' ' ')
             PLAY_TEXT=$("$AAPT2" dump resources "$apk" | grep -A8 'string/play$' | tr -s ' ' | head -n 12 | tr '\n' '|')
             echo "::notice title=Languages in $(basename "$apk")::${LANGS:-none} -- ${PLAY_TEXT}"
@@ -97,14 +101,14 @@ jobs:
       - name: Name the APK
         run: |
           VERSION=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"(.*)".*/\1/')
-          cp app/build/outputs/apk/family/release/app-family-release.apk "PilchardPlayer-$VERSION.apk"
-          cp app/build/outputs/apk/play/release/app-play-release.apk "PilchardPlayer-Play-$VERSION.apk"
+          cp app/build/outputs/apk/family/$BT/app-family-$BT.apk "PilchardPlayer-$VERSION.apk"
+          cp app/build/outputs/apk/play/$BT/app-play-$BT.apk "PilchardPlayer-Play-$VERSION.apk"
           echo "PLAY_APK=PilchardPlayer-Play-$VERSION.apk" >> "$GITHUB_ENV"
           if [ "$HAS_UPLOAD_KEY" = "true" ]; then
             cp app/build/outputs/bundle/playRelease/app-play-release.aab "PilchardPlayer-Play-$VERSION.aab"
             echo "PLAY_AAB=PilchardPlayer-Play-$VERSION.aab" >> "$GITHUB_ENV"
           fi
-          cp livetv/build/outputs/apk/release/livetv-release.apk "PilchardLiveTV.apk"
+          cp livetv/build/outputs/apk/$BT/livetv-$BT.apk "PilchardLiveTV.apk"
           echo "APK=PilchardPlayer-$VERSION.apk" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
@@ -128,7 +132,7 @@ jobs:
       # Each version (versionName in app/build.gradle.kts) gets its own release with
       # the APK attached. Pushing again without changing the version updates it.
       - name: Publish release
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.BT == 'release'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
