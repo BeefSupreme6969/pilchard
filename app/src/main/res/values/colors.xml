@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Soft turquoise from the Pilchard logo's water -->
+    <color name="accent">#6CCFDB</color>
+    <color name="on_accent">#06323B</color>
+    <color name="background">#0A1217</color>
+    <color name="text">#F1F6F8</color>
+    <color name="text_muted">#C3D2DB</color>
+    <color name="pill_outline">#59FFFFFF</color>
+    <color name="panel">#F20A1217</color>
+    <color name="water">#0E7F96</color>
+</resources>
